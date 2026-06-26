@@ -1,0 +1,13 @@
+# Específico de cada PC (gerado pelo instalador)
+python_path.txt
+
+# Ambiente do WhisperX (pesado, ~2 GB — cada um instala o seu)
+whisperx_env/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Lixo de SO
+.DS_Store
+Thumbs.db
