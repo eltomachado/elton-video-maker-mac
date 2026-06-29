@@ -83,6 +83,34 @@ def _us(segundos: float) -> int:
     return int(round(segundos * 1_000_000))
 
 
+def _carimbar_formato_local(draft: dict, pasta_destino: str) -> None:
+    """Copia os campos de versão/plataforma do projeto MAIS RECENTE já existente
+    na pasta de drafts do CapCut do usuário, para o draft gerado abrir na mesma
+    versão dele (Windows ou macOS, qualquer build). Se não achar nenhum, mantém
+    os valores do template embutido."""
+    try:
+        melhor, melhor_mtime = None, -1.0
+        for sub in Path(pasta_destino).iterdir():
+            if not sub.is_dir():
+                continue
+            arq = sub / "draft_info.json"
+            if not arq.exists():
+                arq = sub / "draft_content.json"
+            if not arq.exists():
+                continue
+            m = arq.stat().st_mtime
+            if m > melhor_mtime:
+                melhor, melhor_mtime = arq, m
+        if not melhor:
+            return
+        ref = json.loads(melhor.read_text(encoding="utf-8"))
+        for campo in ("new_version", "version", "last_modified_platform", "platform"):
+            if campo in ref:
+                draft[campo] = ref[campo]
+    except Exception:
+        pass  # qualquer erro → mantém o template embutido
+
+
 def criar_draft_imagens(imagens, audio_path, audio_dur_seg, pasta_destino,
                         nome_projeto="EltonVideo_Cenas",
                         largura=1920, altura=1080, fps=30):
@@ -192,8 +220,19 @@ def criar_draft_imagens(imagens, audio_path, audio_dur_seg, pasta_destino,
         sufixo += 1
     pasta_draft.mkdir(parents=True, exist_ok=True)
 
-    with open(pasta_draft / "draft_content.json", "w", encoding="utf-8") as f:
-        json.dump(draft, f, ensure_ascii=False, separators=(",", ":"))
+    # Carimba a versão/plataforma do projeto mais recente do CapCut do usuário,
+    # para o draft abrir na MESMA versão dele (o template embutido é do CapCut
+    # Windows 8.7 / formato 171; um CapCut diferente — ex.: 8.9 no Mac, formato
+    # 175 — pode não abrir o formato do template).
+    _carimbar_formato_local(draft, pasta_destino)
+
+    # O CapCut do Windows lê o timeline de draft_content.json; o do macOS lê de
+    # draft_info.json. Gravamos os DOIS (mesmo conteúdo) para o projeto abrir nos
+    # dois sistemas. Sem o draft_info.json, o CapCut no Mac lista mas NÃO abre.
+    conteudo = json.dumps(draft, ensure_ascii=False, separators=(",", ":"))
+    for nome_arq in ("draft_content.json", "draft_info.json"):
+        with open(pasta_draft / nome_arq, "w", encoding="utf-8") as f:
+            f.write(conteudo)
 
     ts_agora = cc.agora_us()
     draft_meta = cc._criar_draft_meta(draft_id, nome_projeto, audio_path,

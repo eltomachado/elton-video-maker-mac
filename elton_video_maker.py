@@ -363,6 +363,107 @@ def _audio_duration(path: str, ff: str) -> float:
         return 0.0
 
 
+def _cenas_com_duracao(images, audio_dur):
+    """Converte [(ts, caminho)] em [(caminho, duracao_seg)] cena-por-cena.
+
+    Mesma lógica de tempo do gerador do CapCut: cada cena vai do seu timestamp
+    até o próximo; a primeira cobre desde 0 (preenche a introdução do áudio) e
+    a última vai até o fim do áudio. Quando há várias imagens no mesmo segundo,
+    o bloco é dividido igualmente entre elas.
+    """
+    from itertools import groupby
+    grupos = [(ts, [p for _, p in it]) for ts, it in groupby(images, key=lambda x: x[0])]
+    seq = []
+    for gi, (ts, paths) in enumerate(grupos):
+        fim = grupos[gi + 1][0] if gi + 1 < len(grupos) else audio_dur
+        start = ts if gi > 0 else 0.0
+        total = max(fim - start, 0.1)
+        n = len(paths)
+        base = total / n
+        for k, p in enumerate(paths):
+            dur = base if k < n - 1 else (total - base * (n - 1))
+            seq.append((p, max(dur, 0.05)))
+    return seq
+
+
+def do_export_video():
+    """Renderiza um MP4 final direto (imagens + áudio) via ffmpeg, sem CapCut."""
+    images = scan_images(STATE["images_folder"])
+    if not images:
+        return {"ok": False, "error": "Nenhuma imagem com timestamp [MM-SS] na pasta."}
+    if not STATE["audio_path"]:
+        return {"ok": False, "error": "Áudio não selecionado."}
+
+    dur = _audio_duration_any(STATE["audio_path"])
+    if dur <= 0:
+        return {"ok": False, "error": "Não consegui ler a duração do áudio."}
+
+    cfg = _full_config()
+    vid = cfg.get("video", {})
+    W = int(vid.get("largura", 1920))
+    H = int(vid.get("altura", 1080))
+    FPS = int(vid.get("fps", 30))
+
+    seq = _cenas_com_duracao(images, dur)
+    n = len(seq)
+
+    # Saída ao lado do áudio, nome único
+    out_dir = os.path.dirname(STATE["audio_path"]) or os.path.expanduser("~")
+    base_out = os.path.join(out_dir, f"EltonVideo_{Path(STATE['audio_path']).stem[:24]}.mp4")
+    out_path = base_out
+    i = 1
+    while os.path.exists(out_path):
+        out_path = base_out[:-4] + f"_{i}.mp4"
+        i += 1
+
+    ff = ffmpeg_exe()
+    cmd = [ff, "-y"]
+    for p, d in seq:
+        cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{d:.3f}", "-i", p]
+    cmd += ["-i", STATE["audio_path"]]
+
+    # Cada imagem é escalada p/ caber em WxH (sem distorcer) e centralizada em
+    # fundo preto; depois tudo é concatenado em uma única faixa de vídeo.
+    fc = ""
+    for idx in range(n):
+        fc += (f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={FPS},"
+               f"format=yuv420p[v{idx}];")
+    fc += "".join(f"[v{idx}]" for idx in range(n)) + f"concat=n={n}:v=1:a=0[vout]"
+
+    cmd += [
+        "-filter_complex", fc,
+        "-map", "[vout]", "-map", f"{n}:a",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", out_path,
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as e:
+        return {"ok": False, "error": f"Falha ao executar o ffmpeg: {e}"}
+    if proc.returncode != 0:
+        return {"ok": False, "error": (proc.stderr or proc.stdout or "ffmpeg falhou")[-800:]}
+    if not os.path.exists(out_path):
+        return {"ok": False, "error": "O ffmpeg terminou mas o arquivo MP4 não foi criado."}
+
+    STATE["output_path"] = out_path
+    return {"ok": True, "scenes": n, "path": out_path, "name": os.path.basename(out_path)}
+
+
+def _abrir_no_sistema(alvo: str) -> None:
+    """Abre arquivo/pasta no gerenciador do SO (multiplataforma)."""
+    if not alvo or not os.path.exists(alvo):
+        return
+    if sys.platform == "darwin":
+        # -R revela e seleciona o arquivo no Finder; pasta abre direto
+        subprocess.run(["open", "-R", alvo] if os.path.isfile(alvo) else ["open", alvo])
+    elif os.name == "nt":
+        os.startfile(alvo if os.path.isdir(alvo) else os.path.dirname(alvo))  # type: ignore[attr-defined]
+    else:
+        subprocess.run(["xdg-open", alvo if os.path.isdir(alvo) else os.path.dirname(alvo)])
+
+
 # ═════════════════════════════════════════════════════════════════
 # HTML (UI com o visual + animações da extensão ELTON FLOW)
 # ═════════════════════════════════════════════════════════════════
@@ -536,17 +637,26 @@ dialog input{ width:100%; margin:10px 0; padding:9px 11px; background:var(--surf
 
   <!-- PASSO 4 -->
   <div class="step disabled-step" id="s4">
-    <div class="step-h"><div class="step-n">4</div><div class="step-t">Montar vídeo + enviar ao CapCut</div></div>
-    <div class="glow" id="assembleWrap">
-      <button class="btn btn-accent btn-full" id="btnAssemble" disabled onclick="assemble()">
-        🎬 Montar e Enviar ao CapCut
+    <div class="step-h"><div class="step-n">4</div><div class="step-t">Montar o vídeo final</div></div>
+    <div class="glow" id="exportWrap">
+      <button class="btn btn-accent btn-full" id="btnExport" disabled onclick="exportVideo()">
+        🎬 Exportar vídeo pronto (MP4)
       </button>
     </div>
     <div class="note" id="note4"></div>
-    <div class="note" id="note4b"></div>
     <button class="btn btn-ghost btn-full" id="btnOpen" style="display:none;margin-top:8px" onclick="openOut()">
-      📁 Abrir pasta do projeto CapCut
+      📁 Abrir pasta do vídeo
     </button>
+
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;color:var(--text-muted);font-size:12px">Avançado: enviar ao CapCut (opcional)</summary>
+      <div class="glow" id="assembleWrap" style="margin-top:10px">
+        <button class="btn btn-ghost btn-full" id="btnAssemble" disabled onclick="assemble()">
+          📤 Montar e Enviar ao CapCut
+        </button>
+      </div>
+      <div class="note" id="note4b"></div>
+    </details>
   </div>
 
   <!-- APOIE O CANAL (Pix) -->
@@ -642,7 +752,8 @@ function applyFolderResult(r){
     $('folderName').textContent = r.path; $('folderName').classList.add('set');
     $('folderPath').value = r.path;
     if(r.count>0){ $('note3').className='note ok'; $('note3').textContent = `✓ ${r.count} imagens com timestamp encontradas`;
-      doneStep('s2'); doneStep('s3'); enableStep('s4'); $('btnAssemble').disabled = false; }
+      doneStep('s2'); doneStep('s3'); enableStep('s4');
+      $('btnExport').disabled = false; $('btnAssemble').disabled = false; }
     else { $('note3').className='note warn'; $('note3').textContent = '⚠ Nenhuma imagem com timestamp [MM-SS] nessa pasta'; }
   } else if(r && r.error){
     $('note3').className='note err'; $('note3').textContent = '✗ ' + r.error;
@@ -656,22 +767,38 @@ async function setFolder(){
   if(!p) return;
   applyFolderResult(await api('/api/set_folder', {path:p}));
 }
+async function exportVideo(){
+  const wrap = $('exportWrap'), btn = $('btnExport');
+  wrap.classList.add('on'); btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Renderizando o MP4… (pode levar alguns minutos)';
+  $('note4').textContent='';
+  const r = await api('/api/export_video');
+  wrap.classList.remove('on');
+  btn.innerHTML = '🎬 Exportar vídeo pronto (MP4)'; btn.disabled = false;
+  if(r.ok){
+    $('note4').className='note ok';
+    $('note4').textContent = `✓ Vídeo pronto: ${r.name} (${r.scenes} cenas)`;
+    doneStep('s4'); $('btnOpen').style.display='block';
+  } else {
+    $('note4').className='note err'; $('note4').textContent = '✗ ' + r.error;
+  }
+}
 async function assemble(){
   const wrap = $('assembleWrap'), btn = $('btnAssemble');
   wrap.classList.add('on'); btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Montando e exportando…';
-  $('note4').textContent='';
+  $('note4b').textContent='';
   const r = await api('/api/assemble');
   wrap.classList.remove('on');
-  btn.innerHTML = '🎬 Montar e Enviar ao CapCut';
+  btn.innerHTML = '📤 Montar e Enviar ao CapCut'; btn.disabled = false;
   if(r.ok){
-    $('note4').className='note ok'; $('note4').textContent = `✓ ${r.scenes} cenas montadas na timeline + áudio sincronizado`;
-    if(r.capcut && r.capcut.ok){
-      $('note4b').className='note ok'; $('note4b').textContent = '✓ ' + r.capcut.msg + ' — abra o CapCut e o projeto estará lá, cena por cena.';
-    }
-    doneStep('s4'); $('btnOpen').style.display='block';
+    $('note4b').className='note ok';
+    let m = `✓ ${r.scenes} cenas montadas na timeline + áudio sincronizado`;
+    if(r.capcut && r.capcut.ok){ m = '✓ ' + r.capcut.msg + ' — abra o CapCut e o projeto estará lá, cena por cena.'; }
+    $('note4b').textContent = m;
+    $('btnOpen').style.display='block';
   } else {
-    $('note4').className='note err'; $('note4').textContent = '✗ ' + r.error; btn.disabled = false;
+    $('note4b').className='note err'; $('note4b').textContent = '✗ ' + r.error;
   }
 }
 function openOut(){ api('/api/open_out'); }
@@ -717,7 +844,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             body = {}
 
-        if STATE["busy"] and path in ("/api/transcribe", "/api/assemble", "/api/gen_api"):
+        if STATE["busy"] and path in ("/api/transcribe", "/api/assemble", "/api/export_video", "/api/gen_api"):
             self._send(200, json.dumps({"ok": False, "error": "Já existe uma tarefa em andamento."}))
             return
 
@@ -770,10 +897,17 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 STATE["busy"] = False
 
+        if path == "/api/export_video":
+            STATE["busy"] = True
+            try:
+                return do_export_video()
+            finally:
+                STATE["busy"] = False
+
         if path == "/api/open_out":
-            alvo = STATE.get("capcut_draft") or STATE.get("output_path")
-            if alvo and os.path.exists(alvo):
-                os.startfile(alvo if os.path.isdir(alvo) else os.path.dirname(alvo))
+            # prioriza o MP4 exportado; cai para o draft do CapCut se for o caso
+            alvo = STATE.get("output_path") or STATE.get("capcut_draft")
+            _abrir_no_sistema(alvo)
             return {"ok": True}
 
         return {"ok": False, "error": "rota desconhecida"}

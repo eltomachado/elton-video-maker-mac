@@ -2,7 +2,7 @@
 
 Programa que transforma **áudio em roteiro/legenda (SRT)** e ajuda a montar vídeos automaticamente — 100% local, roda no seu próprio Mac.
 
-Fluxo: **Áudio → WhisperX (transcrição) → SRT → prompts → montagem (CapCut)**.
+Fluxo: **Áudio → WhisperX (transcrição) → SRT → prompts → imagens (ELTON FLOW) → 🎬 vídeo pronto (MP4)**.
 
 Feito por **Elton Machado**.
 📺 Canal: **https://www.youtube.com/@eltonmachadoIA**
@@ -37,10 +37,20 @@ O instalador faz quase tudo. Por baixo, ele usa:
 
 ---
 
+## 🎬 Passo 4 — Montar o vídeo final
+
+Depois de selecionar a pasta com as imagens geradas no ELTON FLOW, você tem duas opções:
+
+- **🎬 Exportar vídeo pronto (MP4)** — *o caminho recomendado.* O programa renderiza o vídeo final sozinho (imagens + áudio sincronizados) usando o ffmpeg embutido. Cada imagem aparece no seu timestamp `[MM-SS]`, encaixada em 1920×1080 sem distorcer. O `.mp4` é salvo **na mesma pasta do áudio** e o botão **"📁 Abrir pasta do vídeo"** revela ele no Finder. Não precisa de CapCut nem de mais nada instalado.
+
+- **📤 Enviar ao CapCut** *(experimental — em "Avançado")* — geraria o projeto editável cena-por-cena dentro do CapCut. ⚠️ **Essa função ainda não está finalizada** (o CapCut do Mac usa um formato de projeto diferente do Windows e nem toda versão abre o draft). Por isso ela fica escondida em *Avançado* e pode falhar. **Para o vídeo pronto, use o Exportar MP4 acima.**
+
+---
+
 ## 🛠️ Deu erro?
 
 - **"Python 3.12 não encontrado" / erro no WhisperX:** rode o `INSTALAR.command` de novo. Se faltar o Homebrew, instale em https://brew.sh e repita.
-- **A montagem não acha o CapCut:** abra o CapCut ao menos uma vez (ele cria a pasta de projetos em `~/Movies/CapCut/...`) e tente de novo.
+- **O "Enviar ao CapCut" deu erro / o projeto não abre:** é esperado — **essa função ainda está em desenvolvimento** no Mac. Use o botão **🎬 Exportar vídeo pronto (MP4)**, que já está funcionando.
 - **Reinstalar do zero:** apague a pasta `whisperx_env` e rode o `INSTALAR.command`.
 
 ---
@@ -53,7 +63,7 @@ O instalador faz quase tudo. Por baixo, ele usa:
 | `INICIAR.command` | Abre o programa |
 | `elton_video_maker.py` | O programa em si |
 | `transcrever_whisperx.py` | Faz a transcrição do áudio |
-| `capcut_draft*.py` | Monta o projeto no CapCut |
+| `capcut_draft*.py` | Monta o projeto no CapCut *(experimental — em desenvolvimento)* |
 
 ---
 
